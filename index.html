@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meeting Action Extractor</title>
+<style>
+:root{--bg:#f5f7fb;--card:#fff;--ink:#172033;--muted:#68738a;--line:#e5e9f1;--accent:#635bdb;--accent2:#5148c7}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
+.wrap{max-width:1040px;margin:44px auto;padding:0 22px}.top{display:flex;align-items:center;gap:14px;margin-bottom:25px}.logo{width:46px;height:46px;border-radius:14px;background:#eceaff;color:var(--accent);display:grid;place-items:center;font-size:23px}.top h1{font-size:25px;line-height:1.2;margin:0}.top p{margin:5px 0 0;color:var(--muted)}
+.layout{display:grid;grid-template-columns:1.1fr .9fr;gap:20px}.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;box-shadow:0 8px 28px #26345a08}
+h2{font-size:17px;margin:0 0 15px}.field{margin:14px 0}.field label{display:block;font-weight:650;font-size:13px;margin-bottom:7px}
+textarea,input,select{width:100%;border:1px solid #dce2ec;border-radius:10px;padding:12px 13px;font:inherit;color:var(--ink);background:#fff;outline:none}
+textarea{min-height:260px;resize:vertical}textarea:focus,input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px #635bdb18}
+.hint{font-size:12px;color:var(--muted);margin-top:6px}.row{display:flex;gap:10px}.row>*{flex:1;min-width:0}
+button{border:0;border-radius:10px;padding:12px 16px;font:inherit;font-weight:700;cursor:pointer}
+.primary{background:var(--accent);color:#fff;width:100%;margin-top:8px}.primary:hover{background:var(--accent2)}.secondary{background:#f0efff;color:var(--accent);padding:9px 12px}
+button:disabled{opacity:.55;cursor:wait}.status{margin-top:12px;color:var(--muted);font-size:13px;min-height:20px}.error{color:#b42318}.results-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.empty{border:1px dashed #d7dce7;border-radius:12px;padding:34px 18px;text-align:center;color:var(--muted);margin-top:12px}.empty strong{display:block;color:var(--ink);margin-bottom:5px}
+table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px}th{text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em}th,td{padding:11px 8px;border-bottom:1px solid var(--line);vertical-align:top}td{overflow-wrap:anywhere}.count{font-size:12px;color:var(--muted);font-weight:500}
+.privacy{margin-top:18px;padding:12px 14px;background:#f8f8ff;border-radius:10px;color:#565d75;font-size:12px}.hidden{display:none}
+@media(max-width:760px){.wrap{margin:25px auto}.layout{grid-template-columns:1fr}.top h1{font-size:21px}.card{padding:18px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="logo">✦</div>
+    <div><h1>Meeting Action Extractor</h1><p>Turn meeting notes into clear, trackable action items.</p></div>
+  </header>
+
+  <main class="layout">
+    <section class="card">
+      <h2>Meeting notes</h2>
+      <div class="field">
+        <label for="notes">Paste your meeting transcript or notes</label>
+        <textarea id="notes" placeholder="Paste your meeting notes here..."></textarea>
+      </div>
+      <div class="field">
+        <label for="mode">Extraction mode</label>
+        <select id="mode">
+          <option value="gemini">Gemini AI (recommended)</option>
+          <option value="offline">Offline pattern matching (no API)</option>
+        </select>
+      </div>
+      <div id="geminiFields">
+        <div class="field">
+          <label for="apiKey">Gemini API key</label>
+          <input id="apiKey" type="password" placeholder="Paste your Gemini API key" autocomplete="off">
+          <div class="hint">Used only for this local app session/request. It is not saved to a file or browser storage.</div>
+        </div>
+        <div class="field">
+          <label for="model">Gemini model</label>
+          <input id="model" value="gemini-3.5-flash-lite" spellcheck="false">
+          <div class="hint">Change this if your API key does not have access to the selected model.</div>
+        </div>
+      </div>
+      <button class="primary" id="runBtn" onclick="extractActions()">✦ Extract action items</button>
+      <div class="status" id="status" role="status"></div>
+      <div class="privacy">🔒 Local use: the page is served from your own computer. In Gemini mode, notes and the API key are sent from this local app to Google's Gemini API for processing.</div>
+    </section>
+
+    <section class="card">
+      <div class="results-head"><h2>Extracted actions</h2><span class="count" id="count">0 items</span></div>
+      <div id="empty" class="empty"><strong>No action items yet</strong>Paste your notes and select “Extract action items”.</div>
+      <div id="tableWrap" class="hidden">
+        <table>
+          <thead><tr><th>Owner</th><th>Task</th><th>Deadline</th></tr></thead>
+          <tbody id="results"></tbody>
+        </table>
+        <button class="secondary" style="margin-top:14px" onclick="downloadCSV()">↓ Export CSV</button>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+let currentActions = [];
+const mode = document.getElementById('mode');
+mode.addEventListener('change', () => {
+  document.getElementById('geminiFields').classList.toggle('hidden', mode.value === 'offline');
+});
+function setStatus(message, isError=false) {
+  const el=document.getElementById('status');
+  el.textContent=message;
+  el.className='status'+(isError?' error':'');
+}
+async function extractActions() {
+  const notes=document.getElementById('notes').value.trim();
+  if(!notes){setStatus('Please paste your meeting notes first.',true);return;}
+  const btn=document.getElementById('runBtn');
+  btn.disabled=true;btn.textContent='Processing...';setStatus('Extracting action items...');
+  try{
+    const response=await fetch('/extract',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        notes,mode:mode.value,
+        api_key:document.getElementById('apiKey').value,
+        model:document.getElementById('model').value.trim()
+      })
+    });
+    const data=await response.json();
+    if(!response.ok)throw new Error(data.error||'Something went wrong.');
+    currentActions=data.actions||[];
+    renderActions(currentActions);
+    setStatus(`Done. Extracted ${currentActions.length} action item(s).`);
+  }catch(err){setStatus(err.message,true);}
+  finally{btn.disabled=false;btn.textContent='✦ Extract action items';}
+}
+function renderActions(actions){
+  const tbody=document.getElementById('results');tbody.replaceChildren();
+  document.getElementById('count').textContent=`${actions.length} item${actions.length===1?'':'s'}`;
+  document.getElementById('empty').classList.toggle('hidden',actions.length>0);
+  document.getElementById('tableWrap').classList.toggle('hidden',actions.length===0);
+  for(const action of actions){
+    const tr=document.createElement('tr');
+    for(const field of ['owner','task','deadline']){
+      const td=document.createElement('td');td.textContent=action[field]||'Not specified';tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  if(actions.length===0)document.getElementById('empty').innerHTML='<strong>No action items found</strong>Try adding more detailed meeting notes.';
+}
+function downloadCSV(){
+  const fields=['owner','task','deadline'];
+  const quote=v=>'"'+String(v??'').replaceAll('"','""')+'"';
+  const csv=[fields.join(','),...currentActions.map(a=>fields.map(f=>quote(a[f])).join(','))].join('\r\n');
+  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');
+  a.href=url;a.download='meeting-action-items.csv';a.click();URL.revokeObjectURL(url);
+}
+</script>
+</body>
+</html>
